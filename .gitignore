@@ -1,0 +1,29 @@
+﻿# Python cache / compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Local database
+*.duckdb
+
+# Generated reports
+data/reports/
+
+# Raw / processed local datasets
+data/raw/
+data/processed/
+
+# Environment files
+.env
+.env.*
+
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
