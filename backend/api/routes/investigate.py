@@ -58,15 +58,17 @@ def investigate(account_id: str, max_hops: int = 4):
 
     # 3. Run detection for all accounts in subgraph
     all_account_signals = {}
+    cycles = graph_builder.get_cycles(G) if detection.CYCLE_DETECTION_ENABLED else []
     for acc_id in all_account_ids:
         acc_txns = [
             t for t in all_txns
             if t["sender_account"] == acc_id or t["receiver_account"] == acc_id
         ]
         signals = detection.run_all_detection(
-            G, acc_id, acc_txns, layers, all_txns
+            G, acc_id, acc_txns, layers, all_txns, cycles=cycles
         )
         all_account_signals[acc_id] = signals
+
 
     # 4. Compute risk scores
     risk_scores = risk_engine.compute_risk_scores_for_subgraph(
@@ -147,17 +149,21 @@ def get_graph(account_id: str, max_hops: int = 4):
     all_account_ids = list(layers.keys())
     all_txns = db.get_subgraph_transactions(all_account_ids)
     all_account_signals = {}
+    cycles = graph_builder.get_cycles(G) if detection.CYCLE_DETECTION_ENABLED else []
     for acc_id in all_account_ids:
         acc_txns = [
             t for t in all_txns
             if t["sender_account"] == acc_id or t["receiver_account"] == acc_id
         ]
         all_account_signals[acc_id] = detection.run_all_detection(
-            G, acc_id, acc_txns, layers, all_txns
+            G, acc_id, acc_txns, layers, all_txns, cycles=cycles
         )
+
+
     risk_scores = risk_engine.compute_risk_scores_for_subgraph(
         all_account_ids, all_account_signals
     )
+
 
     return graph_builder.graph_to_schema(
         G, layers,

@@ -310,6 +310,7 @@ def run_all_detection(
     transactions: List[Dict[str, Any]],
     layers: Dict[str, int],
     all_transactions: Optional[List[Dict[str, Any]]] = None,
+    cycles: Optional[List[List[str]]] = None,
 ) -> List[DetectionSignal]:
     """
     Run all detection signals for a given account.
@@ -318,7 +319,9 @@ def run_all_detection(
     if all_transactions is None:
         all_transactions = transactions
 
-    cycles = get_cycles(G) if CYCLE_DETECTION_ENABLED else []
+    if cycles is None:
+        cycles = get_cycles(G) if CYCLE_DETECTION_ENABLED else []
+
 
     signals = [
         detect_fan_in(G, account_id),

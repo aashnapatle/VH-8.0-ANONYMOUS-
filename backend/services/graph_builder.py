@@ -200,13 +200,15 @@ def get_terminal_nodes(G: nx.DiGraph) -> List[str]:
     return [n for n in G.nodes() if G.out_degree(n) == 0]
 
 
-def get_cycles(G: nx.DiGraph) -> List[List[str]]:
+def get_cycles(G: nx.DiGraph, max_cycles: int = 50) -> List[List[str]]:
     """
-    Detect all simple cycles in the graph.
+    Detect simple cycles in the graph (bounded by max_cycles to prevent exponential blowup on dense graphs).
     Cycles suggest obfuscation / layering tactics.
     """
     try:
-        return list(nx.simple_cycles(G))
+        import itertools
+        return list(itertools.islice(nx.simple_cycles(G), max_cycles))
     except Exception as e:
         logger.warning(f"Cycle detection error: {e}")
         return []
+
