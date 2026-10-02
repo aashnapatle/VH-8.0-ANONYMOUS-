@@ -32,6 +32,7 @@ def build_timeline(
     transactions: List[Dict[str, Any]],
     layers: Dict[str, int],
     victim_account: str,
+    taint_results: Optional[Dict[str, Any]] = None,
 ) -> List[TimelineEvent]:
     """
     Build a chronological timeline from verified transaction records.
@@ -56,6 +57,12 @@ def build_timeline(
         sender_label = _hop_to_label(layers.get(sender, 99))
         receiver_label = _hop_to_label(layers.get(receiver, 99))
 
+        t_amt = None
+        if taint_results and sender in taint_results:
+            tr = taint_results[sender]
+            ratio = getattr(tr, "taint_ratio", tr.get("taint_ratio", 0.0) if isinstance(tr, dict) else 0.0)
+            t_amt = round(amount * float(ratio), 2)
+
         description = (
             f"{sender_label} {sender} → {receiver_label} {receiver}  "
             f"₹{amount:,.0f}"
@@ -70,7 +77,9 @@ def build_timeline(
             account_from=sender,
             account_to=receiver,
             amount=amount,
+            tainted_amount=t_amt,
             transaction_id=txn_id,
+            payment_mode=mode or None,
         ))
 
     # Sort chronologically

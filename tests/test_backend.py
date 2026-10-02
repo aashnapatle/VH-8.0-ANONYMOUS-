@@ -16,15 +16,18 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.db.loader import reset_and_reload, get_connection
+from backend.config import SYNTHETIC_CSV, REAL_PARQUET
+from backend.db.loader import reset_and_reload, reset_and_reload_parquet, get_connection
 from backend.db import queries as db
 
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_db():
-    """Load synthetic data before all tests."""
-    reset_and_reload()
+    """Load synthetic data before unit tests and restore real dataset on teardown."""
+    reset_and_reload(SYNTHETIC_CSV)
     yield
+    if REAL_PARQUET.exists():
+        reset_and_reload_parquet(REAL_PARQUET)
 
 
 class TestAccountLookup:

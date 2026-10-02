@@ -156,7 +156,7 @@ def get_subgraph_transactions(
             payment_mode, narration, ip_address, device_type
         FROM transactions
         WHERE sender_account   IN ({placeholders})
-           OR receiver_account IN ({placeholders})
+          AND receiver_account IN ({placeholders})
         ORDER BY timestamp ASC
     """, account_ids + account_ids).fetchall()
 

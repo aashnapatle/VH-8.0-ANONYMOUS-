@@ -26,15 +26,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi.testclient import TestClient
 from backend.main import app
-from backend.db.loader import reset_and_reload
+from backend.config import SYNTHETIC_CSV, REAL_PARQUET
+from backend.db.loader import reset_and_reload, reset_and_reload_parquet
 
 client = TestClient(app)
 
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_db():
-    reset_and_reload()
+    reset_and_reload(SYNTHETIC_CSV)
     yield
+    if REAL_PARQUET.exists():
+        reset_and_reload_parquet(REAL_PARQUET)
 
 
 def test_health_check():

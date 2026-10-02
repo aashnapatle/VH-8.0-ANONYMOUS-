@@ -114,7 +114,22 @@ def validate_narrative(
                 "LLM must not declare guilt or innocence."
             )
 
-    # 3. Account ID check — all mentioned accounts must be known
+    # 3. Forbidden injection / override phrases (strict phrase-level check)
+    _FORBIDDEN_PHRASES = [
+        "is guilty",
+        "is clean",
+        "mark clean",
+        "ignore previous",
+        "as an ai",
+    ]
+    for phrase in _FORBIDDEN_PHRASES:
+        if phrase in lower:
+            issues.append(
+                f"Forbidden phrase '{phrase}' detected in narrative. "
+                "Possible prompt injection or policy violation."
+            )
+
+    # 4. Account ID check — all mentioned accounts must be known
     mentioned_accounts = _extract_account_ids_from_text(narrative)
     unknown_accounts = mentioned_accounts - known_accounts
     if unknown_accounts:
@@ -123,7 +138,7 @@ def validate_narrative(
             "These do not appear in the investigation data."
         )
 
-    # 4. Amount check — all currency amounts must be close to a known amount
+    # 5. Amount check — all currency amounts must be close to a known amount
     mentioned_amounts = _extract_amounts_from_text(narrative)
     large_amounts = {a for a in mentioned_amounts if a >= 100}
     for amount in large_amounts:
@@ -137,12 +152,52 @@ def validate_narrative(
                 f"data (tolerance {amount_tolerance:.0%}). Possible hallucination."
             )
 
+    # 6. Token-stripping + raw digit check
+    # Strip approved placeholder tokens (e.g. "Rs.X", "AccID:X", "TXN:X")
+    # then verify no raw numeric digits remain — leftover digits = un-tokenized
+    # hallucinated numbers that bypassed the currency-prefix filter.
+    stripped = narrative
+    stripped = re.sub(
+        r"(?:Rs\.?|₹|INR|AccID:|TXN:)\s*[\w,]+",
+        " [TOKEN] ",
+        stripped,
+        flags=re.IGNORECASE,
+    )
+    # Also strip known transaction IDs and account IDs so legitimate references pass
+    for acc in known_accounts:
+        stripped = stripped.replace(acc, " [ACCT] ")
+    for tid in known_txn_ids:
+        stripped = stripped.replace(tid, " [TXN] ")
+
+    if re.search(r"\d", stripped):
+        issues.append(
+            "Raw un-tokenized numeric digits remain after stripping approved tokens. "
+            "This may indicate a hallucinated amount or identifier not present in "
+            "investigation data. Narrative rejected."
+        )
+
+    # 7. Number-word check — block spelled-out numbers that could smuggle amounts
+    _NUMBER_WORDS = [
+        r"\b(zero|one|two|three|four|five|six|seven|eight|nine|ten)\b",
+        r"\b(eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)\b",
+        r"\b(twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)\b",
+        r"\b(hundred|thousand|lakh|crore|million|billion)\b",
+    ]
+    for nw_pattern in _NUMBER_WORDS:
+        if re.search(nw_pattern, lower):
+            issues.append(
+                f"Spelled-out number word detected (pattern: '{nw_pattern}'). "
+                "Narratives must use tokenized placeholders instead of writing out amounts in words."
+            )
+            break  # One report is enough; don't flood the issues list
+
     if issues:
         logger.warning(f"AI validation FAILED: {len(issues)} issue(s) — {issues}")
         return False, issues
 
     logger.info("AI narrative validation PASSED.")
     return True, []
+
 
 
 def build_validator_sets(

@@ -15,7 +15,7 @@ STATUS: IMPLEMENTED
 import duckdb
 import logging
 from pathlib import Path
-from backend.config import DUCKDB_PATH, SYNTHETIC_CSV, DATA_DIR
+from backend.config import DUCKDB_PATH, REAL_PARQUET, REAL_CSV, SYNTHETIC_CSV, DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,16 @@ def get_connection() -> duckdb.DuckDBPyConnection:
 def _init_db() -> duckdb.DuckDBPyConnection:
     """Initialize DuckDB, create tables, load data if needed."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = duckdb.connect(str(DUCKDB_PATH))
-    _create_schema(conn)
-    _ensure_data(conn)
-    return conn
+    try:
+        conn = duckdb.connect(str(DUCKDB_PATH), read_only=False)
+        _create_schema(conn)
+        _ensure_data(conn)
+        return conn
+    except duckdb.IOException as e:
+        if "used by another process" in str(e) or "Cannot open file" in str(e):
+            logger.warning("DuckDB opened by another process, connecting in read_only mode.")
+            return duckdb.connect(str(DUCKDB_PATH), read_only=True)
+        raise
 
 
 def _create_schema(conn: duckdb.DuckDBPyConnection) -> None:
@@ -75,19 +81,23 @@ def _create_schema(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def _ensure_data(conn: duckdb.DuckDBPyConnection) -> None:
-    """Load synthetic CSV if table is empty."""
+    """Ensure data is loaded into DuckDB. Prioritizes real local dataset."""
     count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     if count == 0:
-        if SYNTHETIC_CSV.exists():
-            logger.info(f"Loading synthetic data from {SYNTHETIC_CSV}")
-            load_csv(conn, SYNTHETIC_CSV)
+        if REAL_PARQUET.exists():
+            logger.info(f"Loading real local parquet from {REAL_PARQUET}")
+            load_parquet(conn, REAL_PARQUET)
+        elif REAL_CSV.exists():
+            logger.info(f"Loading real local CSV from {REAL_CSV}")
+            load_csv(conn, REAL_CSV)
         else:
-            logger.warning(
-                "No data loaded. Place a CSV at data/synthetic/transactions.csv "
-                "or call load_csv() / load_parquet() manually."
+            logger.error(
+                "CRITICAL: Real dataset not found at "
+                f"{REAL_PARQUET} or {REAL_CSV}. "
+                "The application will not fall back to synthetic data."
             )
     else:
-        logger.info(f"DuckDB has {count} transactions loaded.")
+        logger.info(f"DuckDB ready with {count:,} transactions loaded.")
 
 
 def load_csv(conn: duckdb.DuckDBPyConnection, csv_path: Path) -> int:
@@ -147,17 +157,36 @@ def load_parquet(conn: duckdb.DuckDBPyConnection, parquet_path: Path) -> int:
     return loaded
 
 
+def reset_and_reload_parquet(parquet_path: Path | None = None) -> int:
+    """
+    Drop and recreate table, load from real Parquet.
+    """
+    conn = get_connection()
+    conn.execute("DROP TABLE IF EXISTS transactions")
+    _create_schema(conn)
+    target_pq = parquet_path or REAL_PARQUET
+    if target_pq.exists():
+        return load_parquet(conn, target_pq)
+    elif REAL_CSV.exists():
+        return load_csv(conn, REAL_CSV)
+    raise FileNotFoundError(f"Real dataset not found at {target_pq} or {REAL_CSV}")
+
+
 def reset_and_reload(csv_path: Path | None = None) -> None:
     """
-    Drop and recreate the table, reload from CSV.
-    Use for fresh ingestion during development.
+    Drop and recreate the table, reload from specified CSV or real Parquet default.
     """
     conn = get_connection()
     conn.execute("DROP TABLE IF EXISTS transactions")
     _create_schema(conn)
     if csv_path:
         load_csv(conn, csv_path)
+    elif REAL_PARQUET.exists():
+        load_parquet(conn, REAL_PARQUET)
+    elif REAL_CSV.exists():
+        load_csv(conn, REAL_CSV)
     elif SYNTHETIC_CSV.exists():
+        logger.warning("Falling back to synthetic CSV in development reset.")
         load_csv(conn, SYNTHETIC_CSV)
 
 

@@ -2,14 +2,27 @@
 schemas.py — Pydantic response models (shared data contract)
 
 These define exactly what the API returns.
-Frontend (Shreya) and backend (Ananya) must both follow these schemas.
+Frontend (Shreya) and backend (Ananya) both follow these schemas.
+Ground-truth aligned for 2M local transaction dataset.
 
 STATUS: IMPLEMENTED
 """
 from __future__ import annotations
-from typing import Optional, List, Any
-from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field
 from datetime import datetime
+
+
+# ─── Data Source ─────────────────────────────────────────────────────────────
+
+class DataSourceInfo(BaseModel):
+    type: str = "LOCAL_SUPPLIED_DATASET"
+    dataset_rows: int = 1997748
+    dataset_date_range: Dict[str, str] = Field(default_factory=lambda: {
+        "from": "2026-09-15 00:00:00",
+        "to": "2026-09-29 23:59:58"
+    })
+    source_file: str = "VoidHacks8_MuleAccount_2M_Transactions.csv"
 
 
 # ─── Transaction ─────────────────────────────────────────────────────────────
@@ -60,10 +73,62 @@ class GraphEdge(BaseModel):
     timestamp: str
     transaction_id: str
     payment_mode: Optional[str] = None
+    sender_ifsc: Optional[str] = None
+    receiver_ifsc: Optional[str] = None
 
 class GraphData(BaseModel):
     nodes: List[GraphNode]
     edges: List[GraphEdge]
+
+
+# ─── Transaction Chain ───────────────────────────────────────────────────────
+
+class TransactionChainItem(BaseModel):
+    hop: int
+    from_account: str
+    to_account: str
+    transaction_id: str
+    amount: float
+    tainted_amount: float
+    timestamp: str
+    payment_mode: Optional[str] = None
+    sender_ifsc: Optional[str] = None
+    receiver_ifsc: Optional[str] = None
+
+
+# ─── Categorical & Metadata Analyses ─────────────────────────────────────────
+
+class PaymentModeSummary(BaseModel):
+    payment_mode: str
+    transaction_count: int
+    total_amount: float
+
+class IPAnalysis(BaseModel):
+    unique_ips: int
+    reused_ips_count: int
+    ip_country: str = "UNAVAILABLE"
+    details: List[Dict[str, Any]] = []
+    note: str = "Country geolocation is UNAVAILABLE_FROM_DATASET in local records."
+
+class DeviceAnalysis(BaseModel):
+    unique_devices: int
+    reused_devices_count: int
+    details: List[Dict[str, Any]] = []
+
+class CrossBankAnalysis(BaseModel):
+    unique_banks: int
+    banks: List[str] = []
+    cross_bank_transfers_count: int = 0
+    details: List[Dict[str, Any]] = []
+
+class CycleAnalysis(BaseModel):
+    cycle_detected: bool
+    cycle_count: int
+    cycles_found: List[List[str]] = []
+
+class FeatureStatus(BaseModel):
+    status: str = "UNAVAILABLE_FROM_DATASET"
+    reason: str
 
 
 # ─── Detection ───────────────────────────────────────────────────────────────
@@ -101,6 +166,7 @@ class TaintResult(BaseModel):
     total_balance: float             # Total balance computed from transactions
     taint_ratio: float               # tainted / total (0.0–1.0)
     model_used: str = "proportional"
+    warning: Optional[str] = None    # Set if opening balance is unknown/pre-funded
     disclaimer: str = (
         "Taint amounts are approximate (proportional model). "
         "Not suitable as standalone forensic evidence."
@@ -157,7 +223,9 @@ class TimelineEvent(BaseModel):
     account_from: Optional[str] = None
     account_to: Optional[str] = None
     amount: Optional[float] = None
+    tainted_amount: Optional[float] = None
     transaction_id: Optional[str] = None
+    payment_mode: Optional[str] = None
 
 
 # ─── Full Investigation Response ─────────────────────────────────────────────
@@ -165,12 +233,27 @@ class TimelineEvent(BaseModel):
 class InvestigationResponse(BaseModel):
     victim_account: str
     investigated_at: str
+    data_source: DataSourceInfo = Field(default_factory=DataSourceInfo)
     account: AccountSummary
     risk: RiskScore
     graph: GraphData
-    timeline: List[TimelineEvent]
-    transactions: List[Transaction]
-    evidence: List[EvidenceItem]
+    transaction_chain: List[TransactionChainItem] = Field(default_factory=list)
+    timeline: List[TimelineEvent] = Field(default_factory=list)
+    transactions: List[Transaction] = Field(default_factory=list)
+    evidence: List[EvidenceItem] = Field(default_factory=list)
     taint: TaintResult
     freeze_plan: FreezePlan
-    data_label: str = "DEVELOPMENT / SYNTHETIC DATA — Not real-world evidence"
+    payment_mode_summary: List[PaymentModeSummary] = Field(default_factory=list)
+    ip_analysis: Optional[IPAnalysis] = None
+    device_analysis: Optional[DeviceAnalysis] = None
+    cross_bank_analysis: Optional[CrossBankAnalysis] = None
+    cycle_analysis: Optional[CycleAnalysis] = None
+    cash_out_analysis: FeatureStatus = Field(default_factory=lambda: FeatureStatus(
+        status="UNAVAILABLE_FROM_DATASET",
+        reason="No explicit cash-out/ATM indicator in dataset records."
+    ))
+    crypto_analysis: FeatureStatus = Field(default_factory=lambda: FeatureStatus(
+        status="UNAVAILABLE_FROM_DATASET",
+        reason="No crypto wallet or exchange indicators in dataset records."
+    ))
+    data_label: str = "LOCAL_SUPPLIED_DATASET — Ground Truth Investigation"

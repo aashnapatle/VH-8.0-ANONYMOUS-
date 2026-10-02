@@ -11,6 +11,9 @@ from pathlib import Path
 # ─── Project Paths ───────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
+PROCESSED_DATA_DIR = DATA_DIR / "processed"
+REAL_PARQUET = PROCESSED_DATA_DIR / "transactions.parquet"
+REAL_CSV = Path(r"C:\Users\anany\Downloads\VoidHacks8_MuleAccount_2M_Transactions.csv")
 SYNTHETIC_CSV = DATA_DIR / "synthetic" / "transactions.csv"
 DUCKDB_PATH = BASE_DIR / "data" / "abhedya.duckdb"
 

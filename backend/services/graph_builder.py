@@ -142,14 +142,20 @@ def graph_to_schema(
     layers: Dict[str, int],
     risk_scores: Optional[Dict[str, float]] = None,
     taint_amounts: Optional[Dict[str, float]] = None,
+    taint_results: Optional[Dict[str, Any]] = None,
 ) -> GraphData:
     """
     Convert NetworkX graph to Pydantic schema for API response.
     Aggregates multiple transactions between the same pair of nodes.
     """
-    # Build nodes
+    # Build nodes — strictly deduplicated by account_id
     nodes: List[GraphNode] = []
+    seen_nodes: Set[str] = set()
     for node_id in G.nodes():
+        if node_id in seen_nodes:
+            continue
+        seen_nodes.add(node_id)
+
         hop = layers.get(node_id, 99)
         layer = _layer_label(hop)
 
@@ -167,26 +173,42 @@ def graph_to_schema(
                     bank = _ifsc_to_bank(ifsc)
                     break
 
+        t_amt = None
+        if taint_amounts and node_id in taint_amounts:
+            t_amt = taint_amounts[node_id]
+        elif taint_results and node_id in taint_results:
+            tr = taint_results[node_id]
+            t_amt = getattr(tr, "tainted_amount", tr.get("tainted_amount", None) if isinstance(tr, dict) else None)
+
         nodes.append(GraphNode(
             id=node_id,
             label=node_id,
             layer=layer,
             risk_score=risk_scores.get(node_id) if risk_scores else None,
-            tainted_amount=taint_amounts.get(node_id) if taint_amounts else None,
+            tainted_amount=t_amt,
             bank=bank,
         ))
 
-    # Build edges (one per transaction for full detail)
+    # Build edges (one per transaction for full detail and traceability)
     edges: List[GraphEdge] = []
     for src, tgt, data in G.edges(data=True):
+        tx_amt = float(data.get("amount", 0))
+        edge_taint = None
+        if taint_results and src in taint_results:
+            tr = taint_results[src]
+            ratio = getattr(tr, "taint_ratio", tr.get("taint_ratio", 0.0) if isinstance(tr, dict) else 0.0)
+            edge_taint = round(tx_amt * float(ratio), 2)
+
         edges.append(GraphEdge(
             source=src,
             target=tgt,
-            amount=float(data.get("amount", 0)),
-            tainted_amount=None,  # filled by taint engine
+            amount=tx_amt,
+            tainted_amount=edge_taint,
             timestamp=str(data.get("timestamp", "")),
             transaction_id=str(data.get("transaction_id", "")),
             payment_mode=data.get("payment_mode"),
+            sender_ifsc=data.get("sender_ifsc"),
+            receiver_ifsc=data.get("receiver_ifsc"),
         ))
 
     return GraphData(nodes=nodes, edges=edges)

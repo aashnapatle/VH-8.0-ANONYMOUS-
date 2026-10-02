@@ -216,16 +216,34 @@ def detect_cross_bank(
     )
 
 
+def build_overlap_indexes(all_transactions: List[Dict[str, Any]]) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
+    """Precompute device-to-accounts and IP-to-accounts mappings once for O(1) lookups."""
+    device_to_accounts: Dict[str, Set[str]] = defaultdict(set)
+    ip_to_accounts: Dict[str, Set[str]] = defaultdict(set)
+    for tx in all_transactions:
+        s = tx.get("sender_account")
+        r = tx.get("receiver_account")
+        dev = tx.get("device_type")
+        ip = tx.get("ip_address")
+        if dev:
+            if s: device_to_accounts[dev].add(s)
+            if r: device_to_accounts[dev].add(r)
+        if ip:
+            if s: ip_to_accounts[ip].add(s)
+            if r: ip_to_accounts[ip].add(r)
+    return device_to_accounts, ip_to_accounts
+
+
 def detect_device_overlap(
     account_id: str,
     transactions: List[Dict[str, Any]],
-    all_transactions: List[Dict[str, Any]],
+    all_transactions: Optional[List[Dict[str, Any]]] = None,
+    device_to_accounts: Optional[Dict[str, Set[str]]] = None,
 ) -> DetectionSignal:
     """
     DEVICE_OVERLAP: device types associated with this account
     also appear in many other accounts (coordination signal).
     """
-    # Devices used by this account
     my_devices: set = set()
     for tx in transactions:
         if tx.get("device_type"):
@@ -239,13 +257,14 @@ def detect_device_overlap(
             value=0.0,
         )
 
-    # Count how many distinct accounts use the same devices
+    if device_to_accounts is None and all_transactions is not None:
+        device_to_accounts, _ = build_overlap_indexes(all_transactions)
+
     accounts_with_same_device: set = set()
-    for tx in all_transactions:
-        if tx.get("device_type") in my_devices:
-            accounts_with_same_device.add(tx["sender_account"])
-            accounts_with_same_device.add(tx["receiver_account"])
-    accounts_with_same_device.discard(account_id)
+    if device_to_accounts:
+        for dev in my_devices:
+            accounts_with_same_device.update(device_to_accounts.get(dev, set()))
+        accounts_with_same_device.discard(account_id)
 
     count = len(accounts_with_same_device)
     triggered = count >= DEVICE_OVERLAP_THRESHOLD
@@ -264,7 +283,8 @@ def detect_device_overlap(
 def detect_ip_overlap(
     account_id: str,
     transactions: List[Dict[str, Any]],
-    all_transactions: List[Dict[str, Any]],
+    all_transactions: Optional[List[Dict[str, Any]]] = None,
+    ip_to_accounts: Optional[Dict[str, Set[str]]] = None,
 ) -> DetectionSignal:
     """
     IP_OVERLAP: IP addresses associated with this account
@@ -283,12 +303,14 @@ def detect_ip_overlap(
             value=0.0,
         )
 
+    if ip_to_accounts is None and all_transactions is not None:
+        _, ip_to_accounts = build_overlap_indexes(all_transactions)
+
     accounts_with_same_ip: set = set()
-    for tx in all_transactions:
-        if tx.get("ip_address") in my_ips:
-            accounts_with_same_ip.add(tx["sender_account"])
-            accounts_with_same_ip.add(tx["receiver_account"])
-    accounts_with_same_ip.discard(account_id)
+    if ip_to_accounts:
+        for ip in my_ips:
+            accounts_with_same_ip.update(ip_to_accounts.get(ip, set()))
+        accounts_with_same_ip.discard(account_id)
 
     count = len(accounts_with_same_ip)
     triggered = count >= IP_OVERLAP_THRESHOLD
@@ -311,6 +333,8 @@ def run_all_detection(
     layers: Dict[str, int],
     all_transactions: Optional[List[Dict[str, Any]]] = None,
     cycles: Optional[List[List[str]]] = None,
+    device_to_accounts: Optional[Dict[str, Set[str]]] = None,
+    ip_to_accounts: Optional[Dict[str, Set[str]]] = None,
 ) -> List[DetectionSignal]:
     """
     Run all detection signals for a given account.
@@ -322,7 +346,6 @@ def run_all_detection(
     if cycles is None:
         cycles = get_cycles(G) if CYCLE_DETECTION_ENABLED else []
 
-
     signals = [
         detect_fan_in(G, account_id),
         detect_fan_out(G, account_id),
@@ -330,8 +353,8 @@ def run_all_detection(
         detect_multi_hop(layers, account_id),
         detect_cycle(G, account_id, cycles),
         detect_cross_bank(G, account_id, transactions),
-        detect_device_overlap(account_id, transactions, all_transactions),
-        detect_ip_overlap(account_id, transactions, all_transactions),
+        detect_device_overlap(account_id, transactions, all_transactions, device_to_accounts=device_to_accounts),
+        detect_ip_overlap(account_id, transactions, all_transactions, ip_to_accounts=ip_to_accounts),
     ]
 
     triggered_codes = [s.code for s in signals if s.triggered]

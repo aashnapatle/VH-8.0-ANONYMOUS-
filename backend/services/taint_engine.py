@@ -63,6 +63,9 @@ class ProportionalTaintEngine:
         self.total_balance: Dict[str, float] = {}
         self.tainted_balance: Dict[str, float] = {}
 
+        # Accounts where opening balance is unknown (observed_balance < 0)
+        self._opening_balance_unknown: Set[str] = set()
+
         # Seed the victim
         self.total_balance[victim_account] = victim_tainted_amount
         self.tainted_balance[victim_account] = victim_tainted_amount
@@ -91,15 +94,32 @@ class ProportionalTaintEngine:
 
         for node in node_order:
             if node not in self.total_balance:
-                # Initialize from incoming edges
-                total_in = sum(
-                    data.get("amount", 0)
-                    for _, _, data in self.G.in_edges(node, data=True)
+                # Compute observed_inflow and observed_outflow from edges,
+                # sorted strictly by timestamp ascending (chronological order).
+                in_edges = sorted(
+                    self.G.in_edges(node, data=True),
+                    key=lambda e: str(e[2].get("timestamp", "")),
                 )
-                self.total_balance[node] = float(total_in)
+                out_edges = sorted(
+                    self.G.out_edges(node, data=True),
+                    key=lambda e: str(e[2].get("timestamp", "")),
+                )
+
+                observed_inflow = sum(float(d.get("amount", 0)) for _, _, d in in_edges)
+                observed_outflow = sum(float(d.get("amount", 0)) for _, _, d in out_edges)
+                observed_balance = observed_inflow - observed_outflow
+
+                if observed_balance < 0:
+                    # Dataset window starts mid-stream — opening balance unknown.
+                    # Tag the account and floor balance at 0.0 for tracking.
+                    self._opening_balance_unknown.add(node)
+                    observed_balance = 0.0
+
+                self.total_balance[node] = float(observed_inflow)
                 self.tainted_balance[node] = 0.0
 
-            # Process outgoing edges: propagate taint proportionally
+            # Process outgoing edges: propagate taint proportionally,
+            # iterating edges in chronological (timestamp-ascending) order.
             total = self.total_balance.get(node, 0)
             tainted = self.tainted_balance.get(node, 0)
 
@@ -108,7 +128,12 @@ class ProportionalTaintEngine:
 
             taint_ratio = min(tainted / total, 1.0)  # never exceed 1.0
 
-            for _, receiver, data in self.G.out_edges(node, data=True):
+            # Sort outgoing edges by timestamp before propagating
+            out_edges_sorted = sorted(
+                self.G.out_edges(node, data=True),
+                key=lambda e: str(e[2].get("timestamp", "")),
+            )
+            for _, receiver, data in out_edges_sorted:
                 tx_amount = float(data.get("amount", 0))
                 if tx_amount <= 0:
                     continue
@@ -125,7 +150,7 @@ class ProportionalTaintEngine:
 
                 logger.debug(
                     f"Taint propagation: {node} → {receiver} "
-                    f"tx=₹{tx_amount:,.0f} tainted=₹{tainted_out:,.2f} "
+                    f"tx={tx_amount:,.0f} tainted={tainted_out:,.2f} "
                     f"ratio={taint_ratio:.2%}"
                 )
 
@@ -136,11 +161,16 @@ class ProportionalTaintEngine:
         tainted = min(tainted, total)  # sanity cap
         ratio = (tainted / total) if total > 0 else 0.0
 
+        warning = None
+        if account_id in self._opening_balance_unknown:
+            warning = "OPENING_BALANCE_UNKNOWN_OR_PRE_FUNDED"
+
         return TaintResult(
             account_id=account_id,
             tainted_amount=round(tainted, 2),
             total_balance=round(total, 2),
             taint_ratio=round(ratio, 4),
+            warning=warning,
         )
 
     def get_all_taints(self) -> Dict[str, TaintResult]:

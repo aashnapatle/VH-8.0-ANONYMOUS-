@@ -1,0 +1,7 @@
+{
+  "name": "abhedya-chakra",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000"
+  }
+}
